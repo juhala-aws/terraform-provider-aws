@@ -108,7 +108,7 @@ func ResourcePolicy() *schema.Resource {
 			},
 			"remediation_enabled": {
 				Type:     schema.TypeBool,
-				Optional: true,
+				Required: true,
 			},
 			"resource_tags": tftags.TagsSchema(),
 			"resource_type": {
