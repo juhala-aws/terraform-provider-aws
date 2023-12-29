@@ -220,6 +220,7 @@ variable "service_labels" {
     "neptune",
     "networkfirewall",
     "networkmanager",
+    "networkmonitor",
     "nimble",
     "oam",
     "opensearch",

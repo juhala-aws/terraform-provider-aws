@@ -193,6 +193,7 @@ import (
 	neptune_sdkv1 "github.com/aws/aws-sdk-go/service/neptune"
 	networkfirewall_sdkv1 "github.com/aws/aws-sdk-go/service/networkfirewall"
 	networkmanager_sdkv1 "github.com/aws/aws-sdk-go/service/networkmanager"
+	networkmonitor_sdkv1 "github.com/aws/aws-sdk-go/service/networkmonitor"
 	opensearchservice_sdkv1 "github.com/aws/aws-sdk-go/service/opensearchservice"
 	opsworks_sdkv1 "github.com/aws/aws-sdk-go/service/opsworks"
 	organizations_sdkv1 "github.com/aws/aws-sdk-go/service/organizations"
@@ -838,6 +839,10 @@ func (c *AWSClient) NetworkFirewallConn(ctx context.Context) *networkfirewall_sd
 
 func (c *AWSClient) NetworkManagerConn(ctx context.Context) *networkmanager_sdkv1.NetworkManager {
 	return errs.Must(conn[*networkmanager_sdkv1.NetworkManager](ctx, c, names.NetworkManager, make(map[string]any)))
+}
+
+func (c *AWSClient) NetworkMonitorConn(ctx context.Context) *networkmonitor_sdkv1.NetworkMonitor {
+	return errs.Must(conn[*networkmonitor_sdkv1.NetworkMonitor](ctx, c, names.NetworkMonitor, make(map[string]any)))
 }
 
 func (c *AWSClient) ObservabilityAccessManagerClient(ctx context.Context) *oam_sdkv2.Client {
