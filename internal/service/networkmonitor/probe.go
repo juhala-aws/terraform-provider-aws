@@ -191,10 +191,14 @@ func resourceProbeUpdate(ctx context.Context, d *schema.ResourceData, meta inter
 
 	conn := meta.(*conns.AWSClient).NetworkMonitorConn(ctx)
 
+	probeID, monitorName, parseErr := ProbeParseID(d.Id())
+	if parseErr != nil {
+		return sdkdiag.AppendErrorf(diags, "parsing CloudWatch Network Monitor Probe (%s) ID: %s", d.Id(), parseErr)
+	}
 	if d.HasChangesExcept("tags", "tags_all") {
 		input := &networkmonitor.UpdateProbeInput{
-			MonitorName: aws.String(d.Get("monitor_name").(string)),
-			ProbeId:     aws.String(d.Id()),
+			MonitorName: &monitorName,
+			ProbeId:     &probeID,
 		}
 
 		if d.HasChange("probe") {
@@ -236,7 +240,7 @@ func resourceProbeDelete(ctx context.Context, d *schema.ResourceData, meta inter
 
 	probeID, monitorName, parseErr := ProbeParseID(d.Id())
 	if parseErr != nil {
-		return sdkdiag.AppendErrorf(diags, "parsing CloudWatch Network Monitor Probe (%s) ID %s", d.Id(), parseErr)
+		return sdkdiag.AppendErrorf(diags, "parsing CloudWatch Network Monitor Probe (%s) ID: %s", d.Id(), parseErr)
 	}
 
 	log.Printf("[DEBUG] Deletin CloudWatch Network Monitor Probe: %s", d.Id())
