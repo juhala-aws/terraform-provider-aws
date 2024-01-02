@@ -2,6 +2,7 @@ package networkmonitor
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -197,7 +198,9 @@ func resourceMonitorRead(ctx context.Context, d *schema.ResourceData, meta inter
 	d.Set("created_at", aws.ToTime(n.CreatedAt).String())
 	d.Set("modified_at", aws.ToTime(n.ModifiedAt).String())
 	d.Set("monitor_name", n.MonitorName)
-	d.Set("probes", flattenProbes(n.Probes))
+	if v, ok := d.GetOk("probes"); ok && v != nil {
+		d.Set("probes", flattenProbes(n.Probes))
+	}
 	d.Set("state", n.State)
 
 	setTagsOut(ctx, n.Tags)
@@ -228,7 +231,7 @@ func resourceMonitorUpdate(ctx context.Context, d *schema.ResourceData, meta int
 		}
 
 		if _, err := waitMonitorUpdated(ctx, conn, d.Id(), d.Timeout(schema.TimeoutUpdate)); err != nil {
-			return sdkdiag.AppendErrorf(diags, "waiting for CloudWatch Network Manager VPC Attachment (%s) update: %s", d.Id(), err)
+			return sdkdiag.AppendErrorf(diags, "waiting for CloudWatch Network Monitor (%s) update: %s", d.Id(), err)
 		}
 	}
 
@@ -254,7 +257,8 @@ func resourceMonitorDelete(ctx context.Context, d *schema.ResourceData, meta int
 				return sdkdiag.AppendErrorf(diags, "deleting CloudWatch Network Monitor Probe (%s): %s", d.Id(), err)
 			}
 
-			if _, err := WaitProbeDeleted(ctx, conn, t["probe_id"].(string), d.Id(), d.Timeout(schema.TimeoutDelete)); err != nil {
+			probeId := fmt.Sprintf("%s:%s", t["probe_id"], d.Get("monitor_name"))
+			if _, err := WaitProbeDeleted(ctx, conn, probeId, d.Timeout(schema.TimeoutDelete)); err != nil {
 				return sdkdiag.AppendErrorf(diags, "waiting for CloudWatch Network Monitor Probe (%s) delete: %s", d.Id(), err)
 			}
 		}

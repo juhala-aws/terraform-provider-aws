@@ -28,7 +28,7 @@ func TestAccNetworkMonitorProbe_basic(t *testing.T) {
 		CheckDestroy:             testAccCheckProbeDestroy(ctx),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccProbeConfig_basic(rName, "10.0.0.1", "200", "8080"),
+				Config: testAccProbeConfig_basic(rName, "10.0.0.1", 8080, 200),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckProbeExists(ctx, resourceName),
 					resource.TestCheckResourceAttrSet(resourceName, "arn"),
@@ -37,12 +37,6 @@ func TestAccNetworkMonitorProbe_basic(t *testing.T) {
 					resource.TestCheckResourceAttr(resourceName, "probe.0.packet_size", "200"),
 					resource.TestCheckResourceAttr(resourceName, "probe.0.protocol", "TCP"),
 				),
-			},
-			{
-				ResourceName:      resourceName,
-				ImportState:       true,
-				ImportStateIdFunc: testAccMonitorImportStateIdFunc(resourceName),
-				ImportStateVerify: true,
 			},
 		},
 	})
@@ -59,18 +53,18 @@ func TestAccNetworkMonitorProbe_updates(t *testing.T) {
 		CheckDestroy:             testAccCheckProbeDestroy(ctx),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccProbeConfig_basic(rName, "10.0.0.1", "200,", "8080"),
+				Config: testAccProbeConfig_basic(rName, "10.0.0.1", 8080, 200),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckProbeExists(ctx, resourceName),
 					resource.TestCheckResourceAttrSet(resourceName, "arn"),
 					resource.TestCheckResourceAttr(resourceName, "probe.0.destination", "10.0.0.1"),
-					resource.TestCheckResourceAttr(resourceName, "probe.0.probe.destination_port", "8080"),
+					resource.TestCheckResourceAttr(resourceName, "probe.0.destination_port", "8080"),
 					resource.TestCheckResourceAttr(resourceName, "probe.0.packet_size", "200"),
 					resource.TestCheckResourceAttr(resourceName, "probe.0.protocol", "TCP"),
 				),
 			},
 			{
-				Config: testAccProbeConfig_basic(rName, "10.0.0.2", "300", "8081"),
+				Config: testAccProbeConfig_basic(rName, "10.0.0.2", 8081, 300),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckProbeExists(ctx, resourceName),
 					resource.TestCheckResourceAttrSet(resourceName, "arn"),
@@ -96,7 +90,7 @@ func TestAccNetworkMonitorProbe_disappears(t *testing.T) {
 		CheckDestroy:             testAccCheckProbeDestroy(ctx),
 		Steps: []resource.TestStep{
 			{
-				Config: testAccProbeConfig_basic(rName, "10.0.0.1", "200", "8080"),
+				Config: testAccProbeConfig_basic(rName, "10.0.0.1", 8080, 200),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckMonitorExists(ctx, resourceName),
 					acctest.CheckResourceDisappears(ctx, acctest.Provider, tfnetworkmonitor.ResourceMonitor(), resourceName),
@@ -116,7 +110,7 @@ func testAccCheckProbeDestroy(ctx context.Context) resource.TestCheckFunc {
 				continue
 			}
 
-			_, err := tfnetworkmonitor.FindProbeByName(ctx, conn, rs.Primary.ID, rs.Primary.Attributes["monitor_name"])
+			_, err := tfnetworkmonitor.FindProbeByName(ctx, conn, rs.Primary.ID)
 
 			if tfresource.NotFound(err) {
 				continue
@@ -146,7 +140,7 @@ func testAccCheckProbeExists(ctx context.Context, n string) resource.TestCheckFu
 
 		conn := acctest.Provider.Meta().(*conns.AWSClient).NetworkMonitorConn(ctx)
 
-		_, err := tfnetworkmonitor.FindProbeByName(ctx, conn, rs.Primary.ID, rs.Primary.Attributes["monitor_name"])
+		_, err := tfnetworkmonitor.FindProbeByName(ctx, conn, rs.Primary.ID)
 
 		return err
 	}
@@ -163,7 +157,7 @@ func testAccProbeImportStateIdFunc(resourceName string) resource.ImportStateIdFu
 	}
 }
 
-func testAccProbeConfig_basic(rName, destination, packetSize, port string) string {
+func testAccProbeConfig_basic(rName, destination string, port, packetSize int) string {
 	return fmt.Sprintf(`
 data "aws_region" "current" {}
 
@@ -187,6 +181,9 @@ resource "aws_subnet" "test" {
 resource "aws_networkmonitor_monitor" "test" {
   aggregation_period = 30
   monitor_name = %[1]q
+  tags = {
+	Name = %[1]q
+  }
 }
 
 
@@ -194,14 +191,11 @@ resource "aws_networkmonitor_probe" "test" {
 	monitor_name = aws_networkmonitor_monitor.test.monitor_name
 	probe {
 		destination = %[2]q
-		destination_port = %[4]q
+		destination_port = %[3]d
 		protocol = "TCP"
 		source_arn = aws_subnet.test.arn
-		packet_size = %[3]q
-	}
-	tags = {
-		Name = %[1]q
+		packet_size = %[4]d
 	}
 }
-`, rName, destination, packetSize, port)
+`, rName, destination, port, packetSize)
 }

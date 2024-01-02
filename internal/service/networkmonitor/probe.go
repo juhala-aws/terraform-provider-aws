@@ -2,7 +2,9 @@ package networkmonitor
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/YakDriver/regexache"
@@ -147,10 +149,11 @@ func resourceProbeCreate(ctx context.Context, d *schema.ResourceData, meta inter
 		return sdkdiag.AppendErrorf(diags, "creating CloudWatch Network Monitor Probe: %s", err)
 	}
 
-	d.SetId(aws.ToString(output.ProbeId))
+	//d.SetId(aws.ToString(output.ProbeId))
+	d.SetId(fmt.Sprintf("%s:%s", aws.ToString(output.ProbeId), monitorName))
 	d.Set("monitor_name", monitorName)
 
-	if _, err := waitProbeCreated(ctx, conn, d.Id(), monitorName, d.Timeout(schema.TimeoutCreate)); err != nil {
+	if _, err := waitProbeCreated(ctx, conn, d.Id(), d.Timeout(schema.TimeoutCreate)); err != nil {
 		return sdkdiag.AppendErrorf(diags, "waiting for Network Monitor Probe (%s) create: %s", d.Id(), err)
 	}
 
@@ -162,7 +165,7 @@ func resourceProbeRead(ctx context.Context, d *schema.ResourceData, meta interfa
 
 	conn := meta.(*conns.AWSClient).NetworkMonitorConn(ctx)
 
-	n, err := FindProbeByName(ctx, conn, d.Id(), d.Get("monitor_name").(string))
+	n, err := FindProbeByName(ctx, conn, d.Id())
 
 	if !d.IsNewResource() && tfresource.NotFound(err) {
 		log.Printf("[WARN]CloudWatch Network Monitor Probe %s not found, removing from state", d.Id())
@@ -194,29 +197,23 @@ func resourceProbeUpdate(ctx context.Context, d *schema.ResourceData, meta inter
 			ProbeId:     aws.String(d.Id()),
 		}
 
-		if d.HasChange("destination") {
-			if v, ok := d.GetOk("destination"); ok && v != nil {
-				input.Destination = aws.String(v.(string))
+		if d.HasChange("probe") {
+			probe := expandProbe(d.Get("probe").([]interface{})[0].(map[string]interface{}), getTagsIn(ctx))
+			if probe.Destination != nil {
+				input.Destination = probe.Destination
+			}
+			if probe.DestinationPort != nil {
+				input.DestinationPort = probe.DestinationPort
+			}
+			if probe.PacketSize != nil {
+				input.PacketSize = probe.PacketSize
+			}
+			if probe.Destination != nil {
+				input.Destination = probe.Destination
 			}
 		}
 
-		if d.HasChange("destination_port") {
-			if v, ok := d.GetOk("destination_port"); ok && v != nil {
-				input.DestinationPort = aws.Int64(int64(v.(int)))
-			}
-		}
-
-		if d.HasChange("packet_size") {
-			if v, ok := d.GetOk("packet_size"); ok && v != nil {
-				input.PacketSize = aws.Int64(int64(v.(int)))
-			}
-		}
-
-		if d.HasChange("protocol") {
-			if v, ok := d.GetOk("protocol"); ok && v != nil {
-				input.Destination = aws.String(v.(string))
-			}
-		}
+		fmt.Println(input)
 
 		_, err := conn.UpdateProbeWithContext(ctx, input)
 
@@ -224,7 +221,7 @@ func resourceProbeUpdate(ctx context.Context, d *schema.ResourceData, meta inter
 			return sdkdiag.AppendErrorf(diags, "updating CloudWatch Network Monitor Probe (%s): %s", d.Id(), err)
 		}
 
-		if _, err := waitMonitorUpdated(ctx, conn, d.Id(), d.Timeout(schema.TimeoutUpdate)); err != nil {
+		if _, err := WaitProbeUpdated(ctx, conn, d.Id(), d.Timeout(schema.TimeoutUpdate)); err != nil {
 			return sdkdiag.AppendErrorf(diags, "waiting for CloudWatch Network Monitor Probe (%s) update: %s", d.Id(), err)
 		}
 	}
@@ -237,10 +234,15 @@ func resourceProbeDelete(ctx context.Context, d *schema.ResourceData, meta inter
 
 	conn := meta.(*conns.AWSClient).NetworkMonitorConn(ctx)
 
+	probeID, monitorName, parseErr := ProbeParseID(d.Id())
+	if parseErr != nil {
+		return sdkdiag.AppendErrorf(diags, "parsing CloudWatch Network Monitor Probe (%s) ID %s", d.Id(), parseErr)
+	}
+
 	log.Printf("[DEBUG] Deletin CloudWatch Network Monitor Probe: %s", d.Id())
 	_, err := conn.DeleteProbeWithContext(ctx, &networkmonitor.DeleteProbeInput{
-		MonitorName: aws.String(d.Get("monitor_name").(string)),
-		ProbeId:     aws.String(d.Id()),
+		MonitorName: &monitorName,
+		ProbeId:     &probeID,
 	})
 
 	if tfawserr.ErrCodeEquals(err, networkmonitor.ErrCodeResourceNotFoundException) {
@@ -251,7 +253,7 @@ func resourceProbeDelete(ctx context.Context, d *schema.ResourceData, meta inter
 		return sdkdiag.AppendErrorf(diags, "deleting CloudWatch Network Monitor Probe (%s): %s", d.Id(), err)
 	}
 
-	if _, err := WaitProbeDeleted(ctx, conn, d.Id(), d.Get("monitor_name").(string), d.Timeout(schema.TimeoutDelete)); err != nil {
+	if _, err := WaitProbeDeleted(ctx, conn, d.Id(), d.Timeout(schema.TimeoutDelete)); err != nil {
 		return sdkdiag.AppendErrorf(diags, "waiting for CloudWatch Network Monitor Probe (%s) delete: %s", d.Id(), err)
 	}
 
@@ -302,6 +304,16 @@ func flattenProbe(apiObject *networkmonitor.GetProbeOutput) []map[string]interfa
 	return []map[string]interface{}{tfMap}
 }
 
+func ProbeParseID(id string) (string, string, error) {
+	parts := strings.SplitN(id, ":", 2)
+
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("unexpected format of ID (%s), expected probeID:monitorName", id)
+	}
+
+	return parts[0], parts[1], nil
+}
+
 func expandProbe(o map[string]interface{}, tags map[string]*string) *networkmonitor.ProbeInput_ {
 	if o == nil {
 		return nil
@@ -336,10 +348,12 @@ func expandProbe(o map[string]interface{}, tags map[string]*string) *networkmoni
 	return object
 }
 
-func FindProbeByName(ctx context.Context, conn *networkmonitor.NetworkMonitor, id, monitorName string) (*networkmonitor.GetProbeOutput, error) {
+func FindProbeByName(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string) (*networkmonitor.GetProbeOutput, error) {
+	probeID, monitorName, err := ProbeParseID(id)
+
 	input := &networkmonitor.GetProbeInput{
 		MonitorName: aws.String(monitorName),
-		ProbeId:     aws.String(id),
+		ProbeId:     aws.String(probeID),
 	}
 
 	output, err := conn.GetProbeWithContext(ctx, input)
@@ -362,9 +376,9 @@ func FindProbeByName(ctx context.Context, conn *networkmonitor.NetworkMonitor, i
 	return output, nil
 }
 
-func StatusProbeState(ctx context.Context, conn *networkmonitor.NetworkMonitor, id, monitorName string) retry.StateRefreshFunc {
+func StatusProbeState(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string) retry.StateRefreshFunc {
 	return func() (interface{}, string, error) {
-		output, err := FindProbeByName(ctx, conn, id, monitorName)
+		output, err := FindProbeByName(ctx, conn, id)
 
 		if tfresource.NotFound(err) {
 			return nil, "", nil
@@ -378,12 +392,12 @@ func StatusProbeState(ctx context.Context, conn *networkmonitor.NetworkMonitor, 
 	}
 }
 
-func waitProbeCreated(ctx context.Context, conn *networkmonitor.NetworkMonitor, id, monitorName string, timeout time.Duration) (*networkmonitor.Probe, error) {
+func waitProbeCreated(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string, timeout time.Duration) (*networkmonitor.Probe, error) {
 	stateConf := &retry.StateChangeConf{
 		Pending: []string{networkmonitor.ProbeStatePending},
 		Target:  []string{networkmonitor.ProbeStateActive},
 		Timeout: timeout,
-		Refresh: StatusProbeState(ctx, conn, id, monitorName),
+		Refresh: StatusProbeState(ctx, conn, id),
 	}
 
 	outputRaw, err := stateConf.WaitForStateContext(ctx)
@@ -395,12 +409,12 @@ func waitProbeCreated(ctx context.Context, conn *networkmonitor.NetworkMonitor, 
 	return nil, err
 }
 
-func WaitProbeDeleted(ctx context.Context, conn *networkmonitor.NetworkMonitor, id, monitorName string, timeout time.Duration) (*networkmonitor.Probe, error) {
+func WaitProbeDeleted(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string, timeout time.Duration) (*networkmonitor.Probe, error) {
 	stateConf := &retry.StateChangeConf{
 		Pending: []string{networkmonitor.ProbeStateDeleting},
 		Target:  []string{},
 		Timeout: timeout,
-		Refresh: StatusProbeState(ctx, conn, id, monitorName),
+		Refresh: StatusProbeState(ctx, conn, id),
 	}
 
 	outputRaw, err := stateConf.WaitForStateContext(ctx)
@@ -412,12 +426,12 @@ func WaitProbeDeleted(ctx context.Context, conn *networkmonitor.NetworkMonitor, 
 	return nil, err
 }
 
-func WaitProbeUpdated(ctx context.Context, conn *networkmonitor.NetworkMonitor, id, monitorName string, timeout time.Duration) (*networkmonitor.Probe, error) {
+func WaitProbeUpdated(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string, timeout time.Duration) (*networkmonitor.Probe, error) {
 	stateConf := &retry.StateChangeConf{
 		Pending: []string{networkmonitor.ProbeStatePending},
 		Target:  []string{networkmonitor.ProbeStateActive},
 		Timeout: timeout,
-		Refresh: StatusProbeState(ctx, conn, id, monitorName),
+		Refresh: StatusProbeState(ctx, conn, id),
 	}
 
 	outputRaw, err := stateConf.WaitForStateContext(ctx)
