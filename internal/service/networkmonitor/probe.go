@@ -329,9 +329,6 @@ func (r *resourceNetworkMonitorProbe) Delete(ctx context.Context, req resource.D
 		)
 		return
 	}
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-
 }
 
 func (r *resourceNetworkMonitorProbe) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {

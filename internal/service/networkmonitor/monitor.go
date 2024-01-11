@@ -409,7 +409,6 @@ func (r *resourceNetworkMonitorMonitor) Delete(ctx context.Context, req resource
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func FindMonitorByName(ctx context.Context, name string, conn *networkmonitor.Client) (*networkmonitor.GetMonitorOutput, error) {
