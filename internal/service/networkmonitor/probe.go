@@ -91,10 +91,10 @@ func (r *resourceNetworkMonitorProbe) Schema(ctx context.Context, request resour
 					"source_arn": schema.StringAttribute{
 						Required: true,
 					},
-					// "tags": schema.MapAttribute{
-					// 	ElementType: types.MapType{ElemType: types.StringType},
-					// 	Computed:    true,
-					// },
+					"tags": schema.MapAttribute{
+						ElementType: types.StringType,
+						Computed:    true,
+					},
 					"state": schema.StringAttribute{
 						Computed: true,
 					},
@@ -152,13 +152,13 @@ func (r *resourceNetworkMonitorProbe) Create(ctx context.Context, req resource.C
 		}
 		out, err = conn.GetProbe(ctx, &in)
 		if out.State == awstypes.ProbeStateInactive || out.State == awstypes.ProbeStatePending {
-			return retry.RetryableError(create.Error(names.NetworkMonitor, create.ErrActionWaitingForCreation, ResNameNetworkMonitorMonitor, state.ID.String(), err))
+			return retry.RetryableError(create.Error(names.NetworkMonitor, create.ErrActionWaitingForCreation, ResNameNetworkMonitorProbe, state.ID.String(), err))
 		}
 		return nil
 	})
 	if retryErr != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionCreating, ResNameNetworkMonitorMonitor, state.ID.String(), nil),
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionCreating, ResNameNetworkMonitorProbe, state.ID.String(), nil),
 			err.Error(),
 		)
 		return
@@ -195,7 +195,7 @@ func (r *resourceNetworkMonitorProbe) Read(ctx context.Context, req resource.Rea
 	}
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorMonitor, state.ID.String(), err),
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorProbe, state.ID.String(), err),
 			err.Error(),
 		)
 		return
@@ -236,7 +236,7 @@ func (r *resourceNetworkMonitorProbe) Update(ctx context.Context, req resource.U
 	probeID, monitorName, err := probeParseID(state.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorMonitor, state.ID.String(), err),
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorProbe, state.ID.String(), err),
 			err.Error(),
 		)
 		return
@@ -260,7 +260,7 @@ func (r *resourceNetworkMonitorProbe) Update(ctx context.Context, req resource.U
 		in.Protocol = awstypes.Protocol(*probePlan.Protocol.ValueStringPointer())
 	}
 
-	out, err := conn.UpdateProbe(ctx, &in)
+	_, err = conn.UpdateProbe(ctx, &in)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionUpdating, ResNameNetworkMonitorProbe, state.ID.String(), nil),
@@ -271,6 +271,9 @@ func (r *resourceNetworkMonitorProbe) Update(ctx context.Context, req resource.U
 
 	state.ID = flex.StringToFramework(ctx, &probeID)
 	state.MonitorName = flex.StringToFramework(ctx, state.MonitorName.ValueStringPointer())
+
+	// refresh updated probe
+	out, err := FindProbeByID(ctx, conn, state.ID.ValueString())
 
 	p, d := flattenProbeConfig(ctx, *out)
 	resp.Diagnostics.Append(d...)
@@ -294,7 +297,7 @@ func (r *resourceNetworkMonitorProbe) Delete(ctx context.Context, req resource.D
 	probeID, monitorName, err := probeParseID(state.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorMonitor, state.ID.String(), err),
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorProbe, state.ID.String(), err),
 			err.Error(),
 		)
 		return
@@ -392,8 +395,8 @@ var probeConfigTypes = map[string]attr.Type{
 	"protocol":         types.StringType,
 	"source_arn":       types.StringType,
 	"state":            types.StringType,
-	// "tags":             types.MapType{ElemType: types.StringType},
-	"vpc_id": types.StringType,
+	"tags":             types.MapType{ElemType: types.StringType},
+	"vpc_id":           types.StringType,
 }
 
 type resourceNetworkMonitorProbeModel struct {
@@ -414,11 +417,11 @@ type probeConfigModel struct {
 	PacketSize      types.Int64  `tfsdk:"packet_size"`
 	ProbeArn        types.String `tfsdk:"probe_arn"`
 	ProbeId         types.String `tfsdk:"probe_id"`
-	// Tags            types.Map    `tfsdk:"tags"`
-	Protocol  types.String `tfsdk:"protocol"`
-	SourceArn types.String `tfsdk:"source_arn"`
-	State     types.String `tfsdk:"state"`
-	VpcId     types.String `tfsdk:"vpc_id"`
+	Tags            types.Map    `tfsdk:"tags"`
+	Protocol        types.String `tfsdk:"protocol"`
+	SourceArn       types.String `tfsdk:"source_arn"`
+	State           types.String `tfsdk:"state"`
+	VpcId           types.String `tfsdk:"vpc_id"`
 }
 
 func flattenProbeConfig(ctx context.Context, object networkmonitor.GetProbeOutput) (types.Object, diag.Diagnostics) {
@@ -439,8 +442,8 @@ func flattenProbeConfig(ctx context.Context, object networkmonitor.GetProbeOutpu
 		"protocol":         flex.StringToFramework(ctx, (*string)(&object.Protocol)),
 		"source_arn":       flex.StringToFramework(ctx, object.SourceArn),
 		"state":            flex.StringToFramework(ctx, (*string)(&object.State)),
-		// "tags":             flex.FlattenFrameworkStringValueMap(ctx, object.Tags),
-		"vpc_id": flex.StringToFramework(ctx, object.VpcId),
+		"tags":             flex.FlattenFrameworkStringValueMap(ctx, object.Tags),
+		"vpc_id":           flex.StringToFramework(ctx, object.VpcId),
 	}
 	objVal, d := types.ObjectValue(probeConfigTypes, t)
 	diags.Append(d...)
