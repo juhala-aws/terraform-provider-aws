@@ -2,374 +2,364 @@ package networkmonitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
-	"github.com/YakDriver/regexache"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go/service/networkmonitor"
-	"github.com/hashicorp/aws-sdk-go-base/v2/awsv1shim/v2/tfawserr"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/aws/aws-sdk-go-v2/service/networkmonitor"
+	awstypes "github.com/aws/aws-sdk-go-v2/service/networkmonitor/types"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/hashicorp/terraform-provider-aws/internal/conns"
-	"github.com/hashicorp/terraform-provider-aws/internal/errs/sdkdiag"
-	"github.com/hashicorp/terraform-provider-aws/internal/flex"
+	"github.com/hashicorp/terraform-provider-aws/internal/create"
+	"github.com/hashicorp/terraform-provider-aws/internal/framework/flex"
 	tftags "github.com/hashicorp/terraform-provider-aws/internal/tags"
 	"github.com/hashicorp/terraform-provider-aws/internal/tfresource"
-	"github.com/hashicorp/terraform-provider-aws/internal/verify"
+
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-provider-aws/internal/framework"
 	"github.com/hashicorp/terraform-provider-aws/names"
 )
 
-// @SDKResource("aws_networkmonitor_probe", name="Probe")
-// @Tags(identifierAttribute="arn")
-func ResourceProbe() *schema.Resource {
-	return &schema.Resource{
-		CreateWithoutTimeout: resourceProbeCreate,
-		ReadWithoutTimeout:   resourceProbeRead,
-		UpdateWithoutTimeout: resourceProbeUpdate,
-		DeleteWithoutTimeout: resourceProbeDelete,
+const (
+	ProbeTimeout               = time.Minute * 10
+	ResNameNetworkMonitorProbe = "CloudWatch Network Monitor Probe"
+)
 
-		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
-		},
+// @FrameworkResource(name="CloudWatch Network Monitor Probe")
+func newResourceNetworkMonitorProbe(context.Context) (resource.ResourceWithConfigure, error) {
+	return &resourceNetworkMonitorProbe{}, nil
+}
 
-		CustomizeDiff: verify.SetTagsDiff,
+type resourceNetworkMonitorProbe struct {
+	framework.ResourceWithConfigure
+}
 
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(10 * time.Minute),
-			Delete: schema.DefaultTimeout(15 * time.Minute),
-		},
+func (r *resourceNetworkMonitorProbe) Metadata(_ context.Context, request resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = "aws_networkmonitor_probe"
+}
 
-		Schema: map[string]*schema.Schema{
-			"arn": {
-				Type:     schema.TypeString,
+func (r *resourceNetworkMonitorProbe) Schema(ctx context.Context, request resource.SchemaRequest, resp *resource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Attributes: map[string]schema.Attribute{
+			"id": framework.IDAttribute(),
+			"arn": schema.StringAttribute{
 				Computed: true,
 			},
-			"monitor_name": {
-				Type:     schema.TypeString,
+			"monitor_name": schema.StringAttribute{
 				Required: true,
 			},
-			"probe": {
-				Type:     schema.TypeList,
-				Required: true,
-				MaxItems: 1,
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
-						"address_family": {
-							Type:     schema.TypeString,
-							Computed: true,
-						},
-						"created_at": {
-							Type:     schema.TypeString,
-							Computed: true,
-						},
-						"destination": {
-							Type:         schema.TypeString,
-							Required:     true,
-							ValidateFunc: validation.StringLenBetween(1, 255),
-						},
-						"destination_port": {
-							Type:         schema.TypeInt,
-							Optional:     true,
-							ValidateFunc: validation.IntBetween(0, 65536),
-						},
-						"modified_at": {
-							Type:     schema.TypeString,
-							Computed: true,
-						},
-						"packet_size": {
-							Type:         schema.TypeInt,
-							Optional:     true,
-							ValidateFunc: validation.IntBetween(56, 8500),
-						},
-						"probe_arn": {
-							Type:     schema.TypeString,
-							Computed: true,
-						},
-						"probe_id": {
-							Type:     schema.TypeString,
-							Computed: true,
-						},
-						"protocol": {
-							Type:     schema.TypeString,
-							Required: true,
-						},
-						"source_arn": {
-							Type:         schema.TypeString,
-							Required:     true,
-							ValidateFunc: validation.StringMatch(regexache.MustCompile(`^arn:.*$`), "AWS ARN"),
-						},
-						"state": {
-							Type:     schema.TypeString,
-							Computed: true,
-						},
-						"tags": {
-							Type:     schema.TypeMap,
-							Computed: true,
-						},
-						"vpc_id": {
-							Type:     schema.TypeString,
-							Computed: true,
-						},
+			names.AttrTags:    tftags.TagsAttribute(),
+			names.AttrTagsAll: tftags.TagsAttributeComputedOnly(),
+		},
+		Blocks: map[string]schema.Block{
+			"probe": schema.SingleNestedBlock{
+				Attributes: map[string]schema.Attribute{
+					"address_family": schema.StringAttribute{
+						Computed: true,
+					},
+					"created_at": schema.Int64Attribute{
+						Computed: true,
+					},
+					"destination": schema.StringAttribute{
+						Required: true,
+					},
+					"destination_port": schema.Int64Attribute{
+						Optional: true,
+					},
+					"modified_at": schema.Int64Attribute{
+						Computed: true,
+					},
+					"packet_size": schema.Int64Attribute{
+						Optional: true,
+					},
+					"probe_arn": schema.StringAttribute{
+						Computed: true,
+					},
+					"probe_id": schema.StringAttribute{
+						Computed: true,
+					},
+					"protocol": schema.StringAttribute{
+						Required: true,
+					},
+					"source_arn": schema.StringAttribute{
+						Required: true,
+					},
+					// "tags": schema.MapAttribute{
+					// 	ElementType: types.MapType{ElemType: types.StringType},
+					// 	Computed:    true,
+					// },
+					"state": schema.StringAttribute{
+						Computed: true,
+					},
+					"vpc_id": schema.StringAttribute{
+						Computed: true,
 					},
 				},
 			},
-			"state": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-			names.AttrTags:    tftags.TagsSchema(),
-			names.AttrTagsAll: tftags.TagsSchemaComputed(),
 		},
 	}
 }
 
-func resourceProbeCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	var diags diag.Diagnostics
+func (r *resourceNetworkMonitorProbe) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	conn := r.Meta().NetworkMonitorClient(ctx)
 
-	conn := meta.(*conns.AWSClient).NetworkMonitorConn(ctx)
+	var state resourceNetworkMonitorProbeModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
-	monitorName := d.Get("monitor_name").(string)
-	probe := expandProbe(d.Get("probe").([]interface{})[0].(map[string]interface{}), getTagsIn(ctx))
+	var probe probeConfigModel
+	resp.Diagnostics.Append(
+		state.Probe.As(
+			ctx,
+			&probe,
+			basetypes.ObjectAsOptions{UnhandledNullAsEmpty: false, UnhandledUnknownAsEmpty: false})...)
 
-	input := &networkmonitor.CreateProbeInput{
-		MonitorName: aws.String(monitorName),
-		Probe:       probe,
+	probeConfig := expandProbeConfig(ctx, probe, resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	input := networkmonitor.CreateProbeInput{
+		MonitorName: state.MonitorName.ValueStringPointer(),
+		Probe:       &probeConfig,
 		Tags:        getTagsIn(ctx),
 	}
 
-	log.Printf("[DEBUG] Creating CloudWatch Network Monitor Probe: %s", input)
-	output, err := conn.CreateProbeWithContext(ctx, input)
-
+	createOut, err := conn.CreateProbe(ctx, &input)
 	if err != nil {
-		return sdkdiag.AppendErrorf(diags, "creating CloudWatch Network Monitor Probe: %s", err)
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionCreating, ResNameNetworkMonitorProbe, state.MonitorName.String(), nil),
+			err.Error(),
+		)
+		return
 	}
 
-	//d.SetId(aws.ToString(output.ProbeId))
-	d.SetId(fmt.Sprintf("%s:%s", aws.ToString(output.ProbeId), monitorName))
-	d.Set("monitor_name", monitorName)
-
-	if _, err := waitProbeCreated(ctx, conn, d.Id(), d.Timeout(schema.TimeoutCreate)); err != nil {
-		return sdkdiag.AppendErrorf(diags, "waiting for Network Monitor Probe (%s) create: %s", d.Id(), err)
-	}
-
-	return append(diags, resourceProbeRead(ctx, d, meta)...)
-}
-
-func resourceProbeRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	var diags diag.Diagnostics
-
-	conn := meta.(*conns.AWSClient).NetworkMonitorConn(ctx)
-
-	n, err := FindProbeByName(ctx, conn, d.Id())
-
-	if !d.IsNewResource() && tfresource.NotFound(err) {
-		log.Printf("[WARN]CloudWatch Network Monitor Probe %s not found, removing from state", d.Id())
-		d.SetId("")
+	var out *networkmonitor.GetProbeOutput
+	retryErr := retry.RetryContext(ctx, ProbeTimeout, func() *retry.RetryError {
+		var err error
+		in := networkmonitor.GetProbeInput{
+			MonitorName: state.MonitorName.ValueStringPointer(),
+			ProbeId:     createOut.ProbeId,
+		}
+		out, err = conn.GetProbe(ctx, &in)
+		if out.State == awstypes.ProbeStateInactive || out.State == awstypes.ProbeStatePending {
+			return retry.RetryableError(create.Error(names.NetworkMonitor, create.ErrActionWaitingForCreation, ResNameNetworkMonitorMonitor, state.ID.String(), err))
+		}
 		return nil
+	})
+	if retryErr != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionCreating, ResNameNetworkMonitorMonitor, state.ID.String(), nil),
+			err.Error(),
+		)
+		return
 	}
 
+	probeID := fmt.Sprintf("%s:%s", *out.ProbeId, *state.MonitorName.ValueStringPointer())
+	state.ID = flex.StringToFramework(ctx, &probeID)
+	state.MonitorName = flex.StringToFramework(ctx, state.MonitorName.ValueStringPointer())
+
+	p, d := flattenProbeConfig(ctx, *out)
+	resp.Diagnostics.Append(d...)
+	state.Probe = p
+	state.Arn = flex.StringToFramework(ctx, out.ProbeArn)
+
+	setTagsOut(ctx, out.Tags)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+func (r *resourceNetworkMonitorProbe) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	conn := r.Meta().NetworkMonitorClient(ctx)
+
+	var state resourceNetworkMonitorProbeModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	out, err := FindProbeByID(ctx, conn, state.ID.ValueString())
+	var nfe *retry.NotFoundError
+	var ere *tfresource.EmptyResultError
+	if errors.As(err, &nfe) || errors.As(err, &ere) {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 	if err != nil {
-		return sdkdiag.AppendErrorf(diags, "reading CloudWatch Network Monitor Probe (%s): %s", d.Id(), err)
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorMonitor, state.ID.String(), err),
+			err.Error(),
+		)
+		return
 	}
 
-	d.Set("arn", n.ProbeArn)
-	d.Set("probe", flattenProbe(n))
-	d.Set("state", n.State)
+	state.Arn = flex.StringToFramework(ctx, out.ProbeArn)
+	p, d := flattenProbeConfig(ctx, *out)
+	resp.Diagnostics.Append(d...)
+	state.Probe = p
 
-	setTagsOut(ctx, n.Tags)
+	setTagsOut(ctx, out.Tags)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 
-	return diags
 }
 
-func resourceProbeUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	var diags diag.Diagnostics
+func (r *resourceNetworkMonitorProbe) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	conn := r.Meta().NetworkMonitorClient(ctx)
 
-	conn := meta.(*conns.AWSClient).NetworkMonitorConn(ctx)
-
-	probeID, monitorName, parseErr := ProbeParseID(d.Id())
-	if parseErr != nil {
-		return sdkdiag.AppendErrorf(diags, "parsing CloudWatch Network Monitor Probe (%s) ID: %s", d.Id(), parseErr)
+	var plan, state resourceNetworkMonitorProbeModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
-	if d.HasChangesExcept("tags", "tags_all") {
-		input := &networkmonitor.UpdateProbeInput{
-			MonitorName: &monitorName,
-			ProbeId:     &probeID,
-		}
+	var probePlan, probeState probeConfigModel
+	resp.Diagnostics.Append(
+		plan.Probe.As(
+			ctx,
+			&probePlan,
+			basetypes.ObjectAsOptions{UnhandledNullAsEmpty: false, UnhandledUnknownAsEmpty: false})...)
 
-		if d.HasChange("probe") {
-			probe := expandProbe(d.Get("probe").([]interface{})[0].(map[string]interface{}), getTagsIn(ctx))
-			if probe.Destination != nil {
-				input.Destination = probe.Destination
-			}
-			if probe.DestinationPort != nil {
-				input.DestinationPort = probe.DestinationPort
-			}
-			if probe.PacketSize != nil {
-				input.PacketSize = probe.PacketSize
-			}
-			if probe.Destination != nil {
-				input.Destination = probe.Destination
-			}
-		}
+	resp.Diagnostics.Append(
+		state.Probe.As(
+			ctx,
+			&probeState,
+			basetypes.ObjectAsOptions{UnhandledNullAsEmpty: false, UnhandledUnknownAsEmpty: false})...)
 
-		fmt.Println(input)
-
-		_, err := conn.UpdateProbeWithContext(ctx, input)
-
-		if err != nil {
-			return sdkdiag.AppendErrorf(diags, "updating CloudWatch Network Monitor Probe (%s): %s", d.Id(), err)
-		}
-
-		if _, err := WaitProbeUpdated(ctx, conn, d.Id(), d.Timeout(schema.TimeoutUpdate)); err != nil {
-			return sdkdiag.AppendErrorf(diags, "waiting for CloudWatch Network Monitor Probe (%s) update: %s", d.Id(), err)
-		}
+	probeID, monitorName, err := probeParseID(state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorMonitor, state.ID.String(), err),
+			err.Error(),
+		)
+		return
 	}
 
-	return append(diags, resourceProbeRead(ctx, d, meta)...)
-}
-
-func resourceProbeDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	var diags diag.Diagnostics
-
-	conn := meta.(*conns.AWSClient).NetworkMonitorConn(ctx)
-
-	probeID, monitorName, parseErr := ProbeParseID(d.Id())
-	if parseErr != nil {
-		return sdkdiag.AppendErrorf(diags, "parsing CloudWatch Network Monitor Probe (%s) ID: %s", d.Id(), parseErr)
-	}
-
-	log.Printf("[DEBUG] Deletin CloudWatch Network Monitor Probe: %s", d.Id())
-	_, err := conn.DeleteProbeWithContext(ctx, &networkmonitor.DeleteProbeInput{
+	in := networkmonitor.UpdateProbeInput{
 		MonitorName: &monitorName,
 		ProbeId:     &probeID,
-	})
-
-	if tfawserr.ErrCodeEquals(err, networkmonitor.ErrCodeResourceNotFoundException) {
-		return nil
 	}
 
+	if !probePlan.Destination.Equal(probeState.Destination) {
+		in.Destination = probePlan.Destination.ValueStringPointer()
+	}
+	if !probePlan.DestinationPort.Equal(probeState.DestinationPort) {
+		in.DestinationPort = aws.Int32(int32(probePlan.DestinationPort.ValueInt64()))
+	}
+	if !probePlan.PacketSize.Equal(probeState.PacketSize) {
+		in.PacketSize = aws.Int32(int32(probePlan.PacketSize.ValueInt64()))
+	}
+	if !probePlan.Protocol.Equal(probeState.Protocol) {
+		in.Protocol = awstypes.Protocol(*probePlan.Protocol.ValueStringPointer())
+	}
+
+	out, err := conn.UpdateProbe(ctx, &in)
 	if err != nil {
-		return sdkdiag.AppendErrorf(diags, "deleting CloudWatch Network Monitor Probe (%s): %s", d.Id(), err)
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionUpdating, ResNameNetworkMonitorProbe, state.ID.String(), nil),
+			err.Error(),
+		)
+		return
 	}
 
-	if _, err := WaitProbeDeleted(ctx, conn, d.Id(), d.Timeout(schema.TimeoutDelete)); err != nil {
-		return sdkdiag.AppendErrorf(diags, "waiting for CloudWatch Network Monitor Probe (%s) delete: %s", d.Id(), err)
-	}
+	state.ID = flex.StringToFramework(ctx, &probeID)
+	state.MonitorName = flex.StringToFramework(ctx, state.MonitorName.ValueStringPointer())
 
-	return nil
+	p, d := flattenProbeConfig(ctx, *out)
+	resp.Diagnostics.Append(d...)
+	state.Probe = p
+	state.Arn = flex.StringToFramework(ctx, out.ProbeArn)
+
+	setTagsOut(ctx, out.Tags)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+
 }
 
-func flattenProbe(apiObject *networkmonitor.GetProbeOutput) []map[string]interface{} {
-	if apiObject == nil {
+func (r *resourceNetworkMonitorProbe) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	conn := r.Meta().NetworkMonitorClient(ctx)
+
+	var state resourceNetworkMonitorProbeModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	probeID, monitorName, err := probeParseID(state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorMonitor, state.ID.String(), err),
+			err.Error(),
+		)
+		return
+	}
+
+	input := networkmonitor.DeleteProbeInput{
+		MonitorName: &monitorName,
+		ProbeId:     &probeID,
+	}
+	_, err = conn.DeleteProbe(ctx, &input)
+
+	retryErr := retry.RetryContext(ctx, ProbeTimeout, func() *retry.RetryError {
+		out, err := FindProbeByID(ctx, conn, state.ID.ValueString())
+		if err != nil {
+			var nfe *awstypes.ResourceNotFoundException
+			if errors.As(err, &nfe) {
+				return nil
+			}
+		}
+		if out.State == awstypes.ProbeStateDeleting {
+			return retry.RetryableError(create.Error(names.NetworkMonitor, create.ErrActionWaitingForDeletion, ResNameNetworkMonitorProbe, state.ID.String(), err))
+		}
 		return nil
+	})
+	if retryErr != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionDeleting, ResNameNetworkMonitorProbe, probeID, nil),
+			err.Error(),
+		)
+		return
 	}
 
-	tfMap := map[string]interface{}{}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 
-	if x := apiObject.AddressFamily; x != nil {
-		tfMap["address_family"] = aws.ToString(x)
-	}
-	if x := apiObject.Destination; x != nil {
-		tfMap["destination"] = aws.ToString(x)
-	}
-	if x := apiObject.DestinationPort; x != nil {
-		tfMap["destination_port"] = aws.ToInt64(x)
-	}
-	if x := apiObject.PacketSize; x != nil {
-		tfMap["packet_size"] = aws.ToInt64(x)
-	}
-	if x := apiObject.ProbeArn; x != nil {
-		tfMap["probe_arn"] = aws.ToString(x)
-	}
-	if x := apiObject.ProbeId; x != nil {
-		tfMap["probe_id"] = aws.ToString(x)
-	}
-	if x := apiObject.Protocol; x != nil {
-		tfMap["protocol"] = aws.ToString(x)
-	}
-	if x := apiObject.SourceArn; x != nil {
-		tfMap["source_arn"] = aws.ToString(x)
-	}
-	if x := apiObject.State; x != nil {
-		tfMap["state"] = aws.ToString(x)
-	}
-	if x := apiObject.Tags; x != nil {
-		tfMap["tags"] = flex.FlattenStringMap(x)
-	}
-	if x := apiObject.VpcId; x != nil {
-		tfMap["vpc_id"] = aws.ToString(x)
-	}
-
-	return []map[string]interface{}{tfMap}
 }
 
-func ProbeParseID(id string) (string, string, error) {
-	parts := strings.SplitN(id, ":", 2)
-
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("unexpected format of ID (%s), expected probeID:monitorName", id)
-	}
-
-	return parts[0], parts[1], nil
+func (r *resourceNetworkMonitorProbe) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	r.SetTagsAll(ctx, req, resp)
 }
 
-func expandProbe(o map[string]interface{}, tags map[string]*string) *networkmonitor.ProbeInput_ {
-	if o == nil {
-		return nil
-	}
-
-	object := &networkmonitor.ProbeInput_{}
-
-	if v, ok := o["destination"].(string); ok {
-		object.Destination = aws.String(v)
-	}
-
-	if v, ok := o["protocol"].(string); ok {
-		object.Protocol = aws.String(v)
-	}
-
-	if v, ok := o["source_arn"].(string); ok {
-		object.SourceArn = aws.String(v)
-	}
-
-	if v, ok := o["destination_port"].(int); ok {
-		object.DestinationPort = aws.Int64(int64(v))
-	}
-
-	if v, ok := o["packet_size"].(int); ok {
-		object.PacketSize = aws.Int64(int64(v))
-	}
-
-	if tags != nil {
-		object.Tags = tags
-	}
-
-	return object
+func (r *resourceNetworkMonitorProbe) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-func FindProbeByName(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string) (*networkmonitor.GetProbeOutput, error) {
-	probeID, monitorName, err := ProbeParseID(id)
+func FindProbeByID(ctx context.Context, conn *networkmonitor.Client, id string) (*networkmonitor.GetProbeOutput, error) {
+	probeID, monitorName, err := probeParseID(id)
+	if err != nil {
+		return nil, err
+	}
 
 	input := &networkmonitor.GetProbeInput{
-		MonitorName: aws.String(monitorName),
-		ProbeId:     aws.String(probeID),
+		ProbeId:     &probeID,
+		MonitorName: &monitorName,
 	}
 
-	output, err := conn.GetProbeWithContext(ctx, input)
-
-	if tfawserr.ErrCodeEquals(err, networkmonitor.ErrCodeResourceNotFoundException) {
-		return nil, &retry.NotFoundError{
-			LastError:   err,
-			LastRequest: input,
-		}
-	}
-
+	output, err := conn.GetProbe(ctx, input)
 	if err != nil {
+		// var nfe *awstypes.ResourceNotFoundException
+		// if errors.As(err, &nfe) {
+		// 	return nil, &retry.NotFoundError{
+		// 		LastError:   err,
+		// 		LastRequest: input,
+		// 	}
+		// }
+
 		return nil, err
 	}
 
@@ -380,69 +370,92 @@ func FindProbeByName(ctx context.Context, conn *networkmonitor.NetworkMonitor, i
 	return output, nil
 }
 
-func StatusProbeState(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string) retry.StateRefreshFunc {
-	return func() (interface{}, string, error) {
-		output, err := FindProbeByName(ctx, conn, id)
+func probeParseID(id string) (string, string, error) {
+	parts := strings.SplitN(id, ":", 2)
 
-		if tfresource.NotFound(err) {
-			return nil, "", nil
-		}
-
-		if err != nil {
-			return nil, "", err
-		}
-
-		return output, aws.ToString(output.State), nil
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("unexpected format of ID (%s), expected probeID:monitorName", id)
 	}
+
+	return parts[0], parts[1], nil
 }
 
-func waitProbeCreated(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string, timeout time.Duration) (*networkmonitor.Probe, error) {
-	stateConf := &retry.StateChangeConf{
-		Pending: []string{networkmonitor.ProbeStatePending},
-		Target:  []string{networkmonitor.ProbeStateActive},
-		Timeout: timeout,
-		Refresh: StatusProbeState(ctx, conn, id),
-	}
-
-	outputRaw, err := stateConf.WaitForStateContext(ctx)
-
-	if output, ok := outputRaw.(*networkmonitor.Probe); ok {
-		return output, err
-	}
-
-	return nil, err
+var probeConfigTypes = map[string]attr.Type{
+	"address_family":   types.StringType,
+	"created_at":       types.Int64Type,
+	"destination":      types.StringType,
+	"destination_port": types.Int64Type,
+	"modified_at":      types.Int64Type,
+	"packet_size":      types.Int64Type,
+	"probe_arn":        types.StringType,
+	"probe_id":         types.StringType,
+	"protocol":         types.StringType,
+	"source_arn":       types.StringType,
+	"state":            types.StringType,
+	// "tags":             types.MapType{ElemType: types.StringType},
+	"vpc_id": types.StringType,
 }
 
-func WaitProbeDeleted(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string, timeout time.Duration) (*networkmonitor.Probe, error) {
-	stateConf := &retry.StateChangeConf{
-		Pending: []string{networkmonitor.ProbeStateDeleting},
-		Target:  []string{},
-		Timeout: timeout,
-		Refresh: StatusProbeState(ctx, conn, id),
-	}
-
-	outputRaw, err := stateConf.WaitForStateContext(ctx)
-
-	if output, ok := outputRaw.(*networkmonitor.Probe); ok {
-		return output, err
-	}
-
-	return nil, err
+type resourceNetworkMonitorProbeModel struct {
+	ID          types.String `tfsdk:"id"`
+	Arn         types.String `tfsdk:"arn"`
+	MonitorName types.String `tfsdk:"monitor_name"`
+	Probe       types.Object `tfsdk:"probe"`
+	Tags        types.Map    `tfsdk:"tags"`
+	TagsAll     types.Map    `tfsdk:"tags_all"`
 }
 
-func WaitProbeUpdated(ctx context.Context, conn *networkmonitor.NetworkMonitor, id string, timeout time.Duration) (*networkmonitor.Probe, error) {
-	stateConf := &retry.StateChangeConf{
-		Pending: []string{networkmonitor.ProbeStatePending},
-		Target:  []string{networkmonitor.ProbeStateActive},
-		Timeout: timeout,
-		Refresh: StatusProbeState(ctx, conn, id),
+type probeConfigModel struct {
+	AddressFamily   types.String `tfsdk:"address_family"`
+	CreatedAt       types.Int64  `tfsdk:"created_at"`
+	Destination     types.String `tfsdk:"destination"`
+	DestinationPort types.Int64  `tfsdk:"destination_port"`
+	ModifiedAt      types.Int64  `tfsdk:"modified_at"`
+	PacketSize      types.Int64  `tfsdk:"packet_size"`
+	ProbeArn        types.String `tfsdk:"probe_arn"`
+	ProbeId         types.String `tfsdk:"probe_id"`
+	// Tags            types.Map    `tfsdk:"tags"`
+	Protocol  types.String `tfsdk:"protocol"`
+	SourceArn types.String `tfsdk:"source_arn"`
+	State     types.String `tfsdk:"state"`
+	VpcId     types.String `tfsdk:"vpc_id"`
+}
+
+func flattenProbeConfig(ctx context.Context, object networkmonitor.GetProbeOutput) (types.Object, diag.Diagnostics) {
+
+	var diags diag.Diagnostics
+	// probeType := types.ObjectType{AttrTypes: probeConfigTypes}
+
+	// probe := []attr.Value{}
+	t := map[string]attr.Value{
+		"address_family":   flex.StringToFramework(ctx, (*string)(&object.AddressFamily)),
+		"created_at":       flex.Int64ToFramework(ctx, aws.Int64(object.CreatedAt.Unix())),
+		"destination":      flex.StringToFramework(ctx, object.Destination),
+		"destination_port": flex.Int64ToFramework(ctx, aws.Int64(int64(*object.DestinationPort))),
+		"modified_at":      flex.Int64ToFramework(ctx, aws.Int64(object.ModifiedAt.Unix())),
+		"packet_size":      flex.Int64ToFramework(ctx, aws.Int64(int64(*object.PacketSize))),
+		"probe_arn":        flex.StringToFramework(ctx, object.ProbeArn),
+		"probe_id":         flex.StringToFramework(ctx, object.ProbeId),
+		"protocol":         flex.StringToFramework(ctx, (*string)(&object.Protocol)),
+		"source_arn":       flex.StringToFramework(ctx, object.SourceArn),
+		"state":            flex.StringToFramework(ctx, (*string)(&object.State)),
+		// "tags":             flex.FlattenFrameworkStringValueMap(ctx, object.Tags),
+		"vpc_id": flex.StringToFramework(ctx, object.VpcId),
 	}
+	objVal, d := types.ObjectValue(probeConfigTypes, t)
+	diags.Append(d...)
 
-	outputRaw, err := stateConf.WaitForStateContext(ctx)
+	return objVal, diags
+}
 
-	if output, ok := outputRaw.(*networkmonitor.Probe); ok {
-		return output, err
+func expandProbeConfig(ctx context.Context, object probeConfigModel, diags diag.Diagnostics) awstypes.ProbeInput {
+
+	return awstypes.ProbeInput{
+		Destination:     object.Destination.ValueStringPointer(),
+		DestinationPort: aws.Int32(int32(object.DestinationPort.ValueInt64())),
+		PacketSize:      aws.Int32(int32(object.PacketSize.ValueInt64())),
+		Protocol:        awstypes.Protocol(*aws.String(object.Protocol.ValueString())),
+		SourceArn:       object.SourceArn.ValueStringPointer(),
+		Tags:            getTagsIn(ctx),
 	}
-
-	return nil, err
 }

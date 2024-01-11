@@ -5,9 +5,8 @@ package networkmonitor
 import (
 	"context"
 
-	aws_sdkv1 "github.com/aws/aws-sdk-go/aws"
-	session_sdkv1 "github.com/aws/aws-sdk-go/aws/session"
-	networkmonitor_sdkv1 "github.com/aws/aws-sdk-go/service/networkmonitor"
+	aws_sdkv2 "github.com/aws/aws-sdk-go-v2/aws"
+	networkmonitor_sdkv2 "github.com/aws/aws-sdk-go-v2/service/networkmonitor"
 	"github.com/hashicorp/terraform-provider-aws/internal/conns"
 	"github.com/hashicorp/terraform-provider-aws/internal/types"
 	"github.com/hashicorp/terraform-provider-aws/names"
@@ -20,7 +19,16 @@ func (p *servicePackage) FrameworkDataSources(ctx context.Context) []*types.Serv
 }
 
 func (p *servicePackage) FrameworkResources(ctx context.Context) []*types.ServicePackageFrameworkResource {
-	return []*types.ServicePackageFrameworkResource{}
+	return []*types.ServicePackageFrameworkResource{
+		{
+			Factory: newResourceNetworkMonitorMonitor,
+			Name:    "CloudWatch Network Monitor Monitor",
+		},
+		{
+			Factory: newResourceNetworkMonitorProbe,
+			Name:    "CloudWatch Network Monitor Probe",
+		},
+	}
 }
 
 func (p *servicePackage) SDKDataSources(ctx context.Context) []*types.ServicePackageSDKDataSource {
@@ -28,35 +36,22 @@ func (p *servicePackage) SDKDataSources(ctx context.Context) []*types.ServicePac
 }
 
 func (p *servicePackage) SDKResources(ctx context.Context) []*types.ServicePackageSDKResource {
-	return []*types.ServicePackageSDKResource{
-		{
-			Factory:  ResourceMonitor,
-			TypeName: "aws_networkmonitor_monitor",
-			Name:     "Monitor",
-			Tags: &types.ServicePackageResourceTags{
-				IdentifierAttribute: "arn",
-			},
-		},
-		{
-			Factory:  ResourceProbe,
-			TypeName: "aws_networkmonitor_probe",
-			Name:     "Probe",
-			Tags: &types.ServicePackageResourceTags{
-				IdentifierAttribute: "arn",
-			},
-		},
-	}
+	return []*types.ServicePackageSDKResource{}
 }
 
 func (p *servicePackage) ServicePackageName() string {
 	return names.NetworkMonitor
 }
 
-// NewConn returns a new AWS SDK for Go v1 client for this service package's AWS API.
-func (p *servicePackage) NewConn(ctx context.Context, config map[string]any) (*networkmonitor_sdkv1.NetworkMonitor, error) {
-	sess := config["session"].(*session_sdkv1.Session)
+// NewClient returns a new AWS SDK for Go v2 client for this service package's AWS API.
+func (p *servicePackage) NewClient(ctx context.Context, config map[string]any) (*networkmonitor_sdkv2.Client, error) {
+	cfg := *(config["aws_sdkv2_config"].(*aws_sdkv2.Config))
 
-	return networkmonitor_sdkv1.New(sess.Copy(&aws_sdkv1.Config{Endpoint: aws_sdkv1.String(config["endpoint"].(string))})), nil
+	return networkmonitor_sdkv2.NewFromConfig(cfg, func(o *networkmonitor_sdkv2.Options) {
+		if endpoint := config["endpoint"].(string); endpoint != "" {
+			o.BaseEndpoint = aws_sdkv2.String(endpoint)
+		}
+	}), nil
 }
 
 func ServicePackage(ctx context.Context) conns.ServicePackage {
