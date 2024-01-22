@@ -181,6 +181,9 @@ resource "aws_subnet" "test" {
 resource "aws_networkmonitor_monitor" "test" {
   aggregation_period = 30
   monitor_name = %[1]q
+  tags = {
+	test = %[1]q
+  }
 }
 
 
@@ -193,6 +196,7 @@ resource "aws_networkmonitor_probe" "test" {
 		source_arn = aws_subnet.test.arn
 		packet_size = %[4]d
 	}
+	depends_on = [aws_networkmonitor_monitor.test]
 }
 `, rName, destination, port, packetSize)
 }

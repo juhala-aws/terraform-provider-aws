@@ -96,6 +96,10 @@ func (r *resourceNetworkMonitorMonitor) Schema(ctx context.Context, request reso
 						"probe_id": schema.StringAttribute{
 							Computed: true,
 						},
+						"probe_tags": schema.MapAttribute{
+							ElementType: types.StringType,
+							Computed:    true,
+						},
 						"protocol": schema.StringAttribute{
 							Required: true,
 						},
@@ -136,7 +140,7 @@ func (r *resourceNetworkMonitorMonitor) Create(ctx context.Context, req resource
 		MonitorName:       plan.MonitorName.ValueStringPointer(),
 		AggregationPeriod: plan.AggregationPeriod.ValueInt64Pointer(),
 		Probes:            probeConfig,
-		Tags:              getTagsIn(ctx),
+		Tags:              flex.ExpandFrameworkStringValueMap(ctx, plan.Tags),
 	}
 
 	_, err := conn.CreateMonitor(ctx, &input)
@@ -170,8 +174,6 @@ func (r *resourceNetworkMonitorMonitor) Create(ctx context.Context, req resource
 	// If there are probes. Wait for all of those to be ready
 	if out.Probes != nil {
 		for _, p := range out.Probes {
-			fmt.Println(&p.ProbeId)
-			fmt.Println(out.Probes[0].CreatedAt)
 			retryErr := retry.RetryContext(ctx, ProbeTimeout, func() *retry.RetryError {
 				var err error
 				var probeOut *networkmonitor.GetProbeOutput
@@ -180,10 +182,6 @@ func (r *resourceNetworkMonitorMonitor) Create(ctx context.Context, req resource
 					ProbeId:     p.ProbeId,
 				}
 				probeOut, err = conn.GetProbe(ctx, &in)
-				if out.CreatedAt != nil {
-					fmt.Println(out.CreatedAt)
-					fmt.Println(out.CreatedAt.Unix())
-				}
 				if probeOut.State == awstypes.ProbeStateInactive || probeOut.State == awstypes.ProbeStatePending {
 					return retry.RetryableError(create.Error(names.NetworkMonitor, create.ErrActionWaitingForCreation, ResNameNetworkMonitorMonitor, state.ID.String(), err))
 				}
@@ -197,12 +195,9 @@ func (r *resourceNetworkMonitorMonitor) Create(ctx context.Context, req resource
 				return
 			}
 		}
-
-		probes, d := flattenMonitorProbeConfig(ctx, &out.Probes)
-		resp.Diagnostics.Append(d...)
-		state.Probes = probes
 	}
-	//refresh monitor to get finished state
+
+	//refresh monitor to get finished state as not all values are returned with createMonitorOutput
 	out, err = FindMonitorByName(ctx, plan.MonitorName.ValueString(), conn)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -212,6 +207,10 @@ func (r *resourceNetworkMonitorMonitor) Create(ctx context.Context, req resource
 		return
 	}
 
+	p, d := flattenMonitorProbeConfig(ctx, &out.Probes)
+	resp.Diagnostics.Append(d...)
+	state.Probes = p
+
 	state.ID = flex.StringToFramework(ctx, out.MonitorName)
 	state.AggregationPeriod = flex.Int64ToFramework(ctx, out.AggregationPeriod)
 	state.MonitorName = flex.StringToFramework(ctx, out.MonitorName)
@@ -220,7 +219,7 @@ func (r *resourceNetworkMonitorMonitor) Create(ctx context.Context, req resource
 	state.CreatedAt = flex.Int64ToFramework(ctx, (aws.Int64(out.CreatedAt.Unix())))
 	state.ModifiedAt = flex.Int64ToFramework(ctx, (aws.Int64(out.ModifiedAt.Unix())))
 
-	setTagsOut(ctx, out.Tags)
+	setTagsOut(ctx, flex.ExpandFrameworkStringValueMap(ctx, plan.Tags))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -256,13 +255,22 @@ func (r *resourceNetworkMonitorMonitor) Read(ctx context.Context, req resource.R
 	state.ModifiedAt = flex.Int64ToFramework(ctx, (aws.Int64(output.ModifiedAt.Unix())))
 
 	// Only update probes if those are already in the state. This is avoid changes in state when probe is created separately.
-	if !state.Probes.IsNull() {
-		if output.Probes != nil {
-			probes, d := flattenMonitorProbeConfig(ctx, &output.Probes)
-			resp.Diagnostics.Append(d...)
-			state.Probes = probes
-		}
-	}
+	// if !state.Probes.IsNull() {
+	// 	fmt.Println("Flattening probes")
+	// 	fmt.Println(state.Probes)
+	// 	probes, d := flattenMonitorProbeConfig(ctx, &output.Probes)
+	// 	resp.Diagnostics.Append(d...)
+	// 	state.Probes = probes
+	// 	fmt.Println(state.Probes)
+	// } else if !state.Arn.IsNull() && output.Probes != nil {
+	// 	// This is a read for import. Get also probes.
+	// 	probes, d := flattenMonitorProbeConfig(ctx, &output.Probes)
+	// 	resp.Diagnostics.Append(d...)
+	// 	state.Probes = probes
+	// } else {
+	// 	fmt.Println("not flattening probes")
+	// 	fmt.Println(state.Probes)
+	// }
 
 	setTagsOut(ctx, output.Tags)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -293,6 +301,7 @@ func (r *resourceNetworkMonitorMonitor) Update(ctx context.Context, req resource
 			return
 		}
 	}
+	setTagsOut(ctx, flex.ExpandFrameworkStringValueMap(ctx, plan.Tags))
 
 	//refresh monitor to get finished state
 	out, err := FindMonitorByName(ctx, plan.MonitorName.ValueString(), conn)
@@ -315,7 +324,6 @@ func (r *resourceNetworkMonitorMonitor) Update(ctx context.Context, req resource
 	}
 	state.CreatedAt = flex.Int64ToFramework(ctx, (aws.Int64(out.CreatedAt.Unix())))
 	state.ModifiedAt = flex.Int64ToFramework(ctx, (aws.Int64(out.ModifiedAt.Unix())))
-	setTagsOut(ctx, out.Tags)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -340,7 +348,6 @@ func (r *resourceNetworkMonitorMonitor) Delete(ctx context.Context, req resource
 
 	if output.Probes != nil {
 		for _, p := range output.Probes {
-			fmt.Println(&p.ProbeId)
 			input := networkmonitor.DeleteProbeInput{
 				MonitorName: state.MonitorName.ValueStringPointer(),
 				ProbeId:     p.ProbeId,
@@ -461,10 +468,11 @@ func flattenMonitorProbeConfig(ctx context.Context, object *[]awstypes.Probe) (t
 			"created_at":       flex.Int64ToFramework(ctx, (aws.Int64(11111))),
 			"destination":      flex.StringToFramework(ctx, v.Destination),
 			"destination_port": flex.Int64ToFramework(ctx, aws.Int64(int64(*v.DestinationPort))),
-			"modified_at":      flex.Int64ToFramework(ctx, (aws.Int64(22222))),
+			"modified_at":      flex.Int64ToFramework(ctx, (aws.Int64(11111))),
 			"packet_size":      flex.Int64ToFramework(ctx, aws.Int64(int64(*v.PacketSize))),
 			"probe_arn":        flex.StringToFramework(ctx, v.ProbeArn),
 			"probe_id":         flex.StringToFramework(ctx, v.ProbeId),
+			"probe_tags":       flex.FlattenFrameworkStringValueMap(ctx, v.Tags),
 			"protocol":         flex.StringToFramework(ctx, (*string)(&v.Protocol)),
 			"source_arn":       flex.StringToFramework(ctx, v.SourceArn),
 			"state":            flex.StringToFramework(ctx, (*string)(&v.State)),
@@ -491,6 +499,7 @@ var monitorProbeConfigTypes = map[string]attr.Type{
 	"packet_size":      types.Int64Type,
 	"probe_arn":        types.StringType,
 	"probe_id":         types.StringType,
+	"probe_tags":       types.MapType{ElemType: types.StringType},
 	"protocol":         types.StringType,
 	"source_arn":       types.StringType,
 	"state":            types.StringType,
@@ -521,11 +530,11 @@ type monitorProbeConfigModel struct {
 	PacketSize      types.Int64  `tfsdk:"packet_size"`
 	ProbeArn        types.String `tfsdk:"probe_arn"`
 	ProbeId         types.String `tfsdk:"probe_id"`
-	// ProbeTags       types.Map    `tfsdk:"probe_tags"`
-	Protocol  types.String `tfsdk:"protocol"`
-	SourceArn types.String `tfsdk:"source_arn"`
-	State     types.String `tfsdk:"state"`
-	VpcId     types.String `tfsdk:"vpc_id"`
+	ProbeTags       types.Map    `tfsdk:"probe_tags"`
+	Protocol        types.String `tfsdk:"protocol"`
+	SourceArn       types.String `tfsdk:"source_arn"`
+	State           types.String `tfsdk:"state"`
+	VpcId           types.String `tfsdk:"vpc_id"`
 }
 
 func expandMonitorProbeConfig(ctx context.Context, object []monitorProbeConfigModel, diags diag.Diagnostics) []awstypes.CreateMonitorProbeInput {
@@ -542,6 +551,7 @@ func expandMonitorProbeConfig(ctx context.Context, object []monitorProbeConfigMo
 			PacketSize:      flex.Int32FromFramework(ctx, v.PacketSize),
 			Protocol:        awstypes.Protocol(*aws.String(v.Protocol.ValueString())),
 			SourceArn:       v.SourceArn.ValueStringPointer(),
+			ProbeTags:       flex.ExpandFrameworkStringValueMap(ctx, v.ProbeTags),
 		}
 		apiObject[index] = t
 	}

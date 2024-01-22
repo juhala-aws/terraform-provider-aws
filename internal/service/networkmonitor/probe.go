@@ -131,7 +131,7 @@ func (r *resourceNetworkMonitorProbe) Create(ctx context.Context, req resource.C
 	input := networkmonitor.CreateProbeInput{
 		MonitorName: state.MonitorName.ValueStringPointer(),
 		Probe:       &probeConfig,
-		Tags:        getTagsIn(ctx),
+		Tags:        flex.ExpandFrameworkStringValueMap(ctx, state.Tags),
 	}
 
 	createOut, err := conn.CreateProbe(ctx, &input)
@@ -201,6 +201,16 @@ func (r *resourceNetworkMonitorProbe) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
+	state.ID = flex.StringToFramework(ctx, state.ID.ValueStringPointer())
+	_, monitorName, err := probeParseID(state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorProbe, state.ID.String(), err),
+			err.Error(),
+		)
+		return
+	}
+	state.MonitorName = flex.StringToFramework(ctx, &monitorName)
 	state.Arn = flex.StringToFramework(ctx, out.ProbeArn)
 	p, d := flattenProbeConfig(ctx, *out)
 	resp.Diagnostics.Append(d...)
@@ -236,7 +246,7 @@ func (r *resourceNetworkMonitorProbe) Update(ctx context.Context, req resource.U
 	probeID, monitorName, err := probeParseID(state.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorProbe, state.ID.String(), err),
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionUpdating, ResNameNetworkMonitorProbe, state.ID.String(), err),
 			err.Error(),
 		)
 		return
@@ -269,7 +279,28 @@ func (r *resourceNetworkMonitorProbe) Update(ctx context.Context, req resource.U
 		return
 	}
 
-	state.ID = flex.StringToFramework(ctx, &probeID)
+	retryErr := retry.RetryContext(ctx, ProbeTimeout, func() *retry.RetryError {
+		out, err := FindProbeByID(ctx, conn, state.ID.ValueString())
+		if err != nil {
+			var nfe *awstypes.ResourceNotFoundException
+			if errors.As(err, &nfe) {
+				return nil
+			}
+		}
+		if out.State == awstypes.ProbeStatePending {
+			return retry.RetryableError(create.Error(names.NetworkMonitor, create.ErrActionWaitingForUpdate, ResNameNetworkMonitorProbe, state.ID.String(), err))
+		}
+		return nil
+	})
+	if retryErr != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionUpdating, ResNameNetworkMonitorProbe, probeID, nil),
+			err.Error(),
+		)
+		return
+	}
+
+	state.ID = flex.StringToFramework(ctx, state.ID.ValueStringPointer())
 	state.MonitorName = flex.StringToFramework(ctx, state.MonitorName.ValueStringPointer())
 
 	// refresh updated probe
@@ -297,7 +328,7 @@ func (r *resourceNetworkMonitorProbe) Delete(ctx context.Context, req resource.D
 	probeID, monitorName, err := probeParseID(state.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionReading, ResNameNetworkMonitorProbe, state.ID.String(), err),
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionDeleting, ResNameNetworkMonitorProbe, state.ID.String(), nil),
 			err.Error(),
 		)
 		return
@@ -308,6 +339,13 @@ func (r *resourceNetworkMonitorProbe) Delete(ctx context.Context, req resource.D
 		ProbeId:     &probeID,
 	}
 	_, err = conn.DeleteProbe(ctx, &input)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.NetworkMonitor, create.ErrActionDeleting, ResNameNetworkMonitorProbe, state.ID.String(), nil),
+			err.Error(),
+		)
+		return
+	}
 
 	retryErr := retry.RetryContext(ctx, ProbeTimeout, func() *retry.RetryError {
 		out, err := FindProbeByID(ctx, conn, state.ID.ValueString())
@@ -352,13 +390,13 @@ func FindProbeByID(ctx context.Context, conn *networkmonitor.Client, id string) 
 
 	output, err := conn.GetProbe(ctx, input)
 	if err != nil {
-		// var nfe *awstypes.ResourceNotFoundException
-		// if errors.As(err, &nfe) {
-		// 	return nil, &retry.NotFoundError{
-		// 		LastError:   err,
-		// 		LastRequest: input,
-		// 	}
-		// }
+		var nfe *awstypes.ResourceNotFoundException
+		if errors.As(err, &nfe) {
+			return nil, &retry.NotFoundError{
+				LastError:   err,
+				LastRequest: input,
+			}
+		}
 
 		return nil, err
 	}
@@ -456,6 +494,6 @@ func expandProbeConfig(ctx context.Context, object probeConfigModel, diags diag.
 		PacketSize:      aws.Int32(int32(object.PacketSize.ValueInt64())),
 		Protocol:        awstypes.Protocol(*aws.String(object.Protocol.ValueString())),
 		SourceArn:       object.SourceArn.ValueStringPointer(),
-		Tags:            getTagsIn(ctx),
+		Tags:            flex.ExpandFrameworkStringValueMap(ctx, object.Tags),
 	}
 }

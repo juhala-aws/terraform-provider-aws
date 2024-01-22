@@ -34,12 +34,14 @@ func TestAccNetworkMonitorMonitor_basic(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckMonitorExists(ctx, resourceName),
 					resource.TestCheckResourceAttrSet(resourceName, "arn"),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
 				),
 			},
 			{
-				ResourceName:      resourceName,
-				ImportState:       true,
-				ImportStateVerify: true,
+				ResourceName:            resourceName,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"tags", "tags_all"},
 			},
 		},
 	})
@@ -61,12 +63,14 @@ func TestAccNetworkMonitorMonitor_withProbe(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckMonitorExists(ctx, resourceName),
 					resource.TestCheckResourceAttrSet(resourceName, "arn"),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
 				),
 			},
 			{
-				ResourceName:      resourceName,
-				ImportState:       true,
-				ImportStateVerify: true,
+				ResourceName:            resourceName,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"tags", "tags_all"},
 			},
 		},
 	})
@@ -88,6 +92,7 @@ func TestAccNetworkMonitorMonitor_updates(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckMonitorExists(ctx, resourceName),
 					resource.TestCheckResourceAttr(resourceName, "aggregation_period", "30"),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
 				),
 			},
 			{
@@ -95,6 +100,7 @@ func TestAccNetworkMonitorMonitor_updates(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckMonitorExists(ctx, resourceName),
 					resource.TestCheckResourceAttr(resourceName, "aggregation_period", "60"),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
 				),
 			},
 		},
@@ -116,7 +122,7 @@ func TestAccNetworkMonitorMonitor_disappears(t *testing.T) {
 				Config: testAccMonitorConfig_basic(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckMonitorExists(ctx, resourceName),
-					// acctest.CheckResourceDisappears(ctx, acctest.Provider, tfnetworkmonitor.ResourceNetworkMonitorMonitor, resourceName),
+					acctest.CheckFrameworkResourceDisappears(ctx, acctest.Provider, tfnetworkmonitor.ResourceNetworkMonitorMonitor, resourceName),
 				),
 				ExpectNonEmptyPlan: true,
 			},
@@ -199,7 +205,6 @@ resource "aws_networkmonitor_monitor" "test" {
   monitor_name = %[1]q
   tags = {
 	test = %[1]q
-	updates = "test"
   }
 }
 `, rName)
@@ -218,6 +223,9 @@ resource "aws_networkmonitor_monitor" "test" {
 		protocol = "TCP"
 		source_arn = aws_subnet.test.arn
 		packet_size = 200
+  }
+  tags = {
+	test = %[1]q
   }
 }
 `, rName))
