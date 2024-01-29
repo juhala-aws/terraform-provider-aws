@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/networkmonitor"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/networkmonitor/types"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 	"github.com/hashicorp/terraform-provider-aws/internal/create"
 	"github.com/hashicorp/terraform-provider-aws/internal/framework/flex"
@@ -21,6 +24,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-provider-aws/internal/framework"
@@ -51,9 +57,19 @@ func (r *resourceNetworkMonitorProbe) Schema(ctx context.Context, request resour
 			"id": framework.IDAttribute(),
 			"arn": schema.StringAttribute{
 				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"monitor_name": schema.StringAttribute{
 				Required: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(regexp.MustCompile("[a-zA-Z0-9_-]+"), "Must match [a-zA-Z0-9_-]+"),
+					stringvalidator.LengthBetween(1, 255),
+				},
 			},
 			names.AttrTags:    tftags.TagsAttribute(),
 			names.AttrTagsAll: tftags.TagsAttributeComputedOnly(),
@@ -69,15 +85,24 @@ func (r *resourceNetworkMonitorProbe) Schema(ctx context.Context, request resour
 					},
 					"destination": schema.StringAttribute{
 						Required: true,
+						Validators: []validator.String{
+							stringvalidator.LengthBetween(1, 255),
+						},
 					},
 					"destination_port": schema.Int64Attribute{
 						Optional: true,
+						Validators: []validator.Int64{
+							int64validator.Between(0, 65536),
+						},
 					},
 					"modified_at": schema.Int64Attribute{
 						Computed: true,
 					},
 					"packet_size": schema.Int64Attribute{
 						Optional: true,
+						Validators: []validator.Int64{
+							int64validator.Between(56, 8500),
+						},
 					},
 					"probe_arn": schema.StringAttribute{
 						Computed: true,
@@ -87,9 +112,16 @@ func (r *resourceNetworkMonitorProbe) Schema(ctx context.Context, request resour
 					},
 					"protocol": schema.StringAttribute{
 						Required: true,
+						// Validators: []validator.String{
+						// 	stringvalidator.OneOf(awstypes.Protocol.Values()),
+						// },
 					},
 					"source_arn": schema.StringAttribute{
 						Required: true,
+						Validators: []validator.String{
+							stringvalidator.LengthBetween(20, 2048),
+							stringvalidator.RegexMatches(regexp.MustCompile("arn:.*"), "Must match pattern arn:*"),
+						},
 					},
 					"tags": schema.MapAttribute{
 						ElementType: types.StringType,
@@ -462,9 +494,7 @@ type probeConfigModel struct {
 func flattenProbeConfig(ctx context.Context, object networkmonitor.GetProbeOutput) (types.Object, diag.Diagnostics) {
 
 	var diags diag.Diagnostics
-	// probeType := types.ObjectType{AttrTypes: probeConfigTypes}
 
-	// probe := []attr.Value{}
 	t := map[string]attr.Value{
 		"address_family":   flex.StringToFramework(ctx, (*string)(&object.AddressFamily)),
 		"created_at":       flex.Int64ToFramework(ctx, aws.Int64(object.CreatedAt.Unix())),

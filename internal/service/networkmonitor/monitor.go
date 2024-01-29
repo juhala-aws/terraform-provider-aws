@@ -4,16 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/networkmonitor"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/networkmonitor/types"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
@@ -49,21 +56,40 @@ func (r *resourceNetworkMonitorMonitor) Schema(ctx context.Context, request reso
 			"id": framework.IDAttribute(),
 			"arn": schema.StringAttribute{
 				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"aggregation_period": schema.Int64Attribute{
 				Optional: true,
+				Validators: []validator.Int64{
+					int64validator.OneOf(30, 60),
+				},
 			},
 			"created_at": schema.Int64Attribute{
 				Computed: true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"modified_at": schema.Int64Attribute{
 				Computed: true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"monitor_name": schema.StringAttribute{
 				Required: true,
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(regexp.MustCompile("[a-zA-Z0-9_-]+"), "Must match [a-zA-Z0-9_-]+"),
+					stringvalidator.LengthBetween(1, 255),
+				},
 			},
 			"state": schema.StringAttribute{
 				Computed: true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			names.AttrTags:    tftags.TagsAttribute(),
 			names.AttrTagsAll: tftags.TagsAttributeComputedOnly(),
@@ -80,15 +106,24 @@ func (r *resourceNetworkMonitorMonitor) Schema(ctx context.Context, request reso
 						},
 						"destination": schema.StringAttribute{
 							Required: true,
+							Validators: []validator.String{
+								stringvalidator.LengthBetween(1, 255),
+							},
 						},
 						"destination_port": schema.Int64Attribute{
 							Optional: true,
+							Validators: []validator.Int64{
+								int64validator.Between(0, 65536),
+							},
 						},
 						"modified_at": schema.Int64Attribute{
 							Computed: true,
 						},
 						"packet_size": schema.Int64Attribute{
 							Optional: true,
+							Validators: []validator.Int64{
+								int64validator.Between(56, 8500),
+							},
 						},
 						"probe_arn": schema.StringAttribute{
 							Computed: true,
@@ -102,6 +137,10 @@ func (r *resourceNetworkMonitorMonitor) Schema(ctx context.Context, request reso
 						},
 						"protocol": schema.StringAttribute{
 							Required: true,
+							Validators: []validator.String{
+								stringvalidator.LengthBetween(20, 2048),
+								stringvalidator.RegexMatches(regexp.MustCompile("arn:.*"), "Must match pattern arn:*"),
+							},
 						},
 						"source_arn": schema.StringAttribute{
 							Required: true,
@@ -255,22 +294,13 @@ func (r *resourceNetworkMonitorMonitor) Read(ctx context.Context, req resource.R
 	state.ModifiedAt = flex.Int64ToFramework(ctx, (aws.Int64(output.ModifiedAt.Unix())))
 
 	// Only update probes if those are already in the state. This is avoid changes in state when probe is created separately.
-	// if !state.Probes.IsNull() {
-	// 	fmt.Println("Flattening probes")
-	// 	fmt.Println(state.Probes)
-	// 	probes, d := flattenMonitorProbeConfig(ctx, &output.Probes)
-	// 	resp.Diagnostics.Append(d...)
-	// 	state.Probes = probes
-	// 	fmt.Println(state.Probes)
-	// } else if !state.Arn.IsNull() && output.Probes != nil {
-	// 	// This is a read for import. Get also probes.
-	// 	probes, d := flattenMonitorProbeConfig(ctx, &output.Probes)
-	// 	resp.Diagnostics.Append(d...)
-	// 	state.Probes = probes
-	// } else {
-	// 	fmt.Println("not flattening probes")
-	// 	fmt.Println(state.Probes)
-	// }
+
+	if output.Probes != nil {
+		// This is a read for import. Get also probes.
+		probes, d := flattenMonitorProbeConfig(ctx, &output.Probes)
+		resp.Diagnostics.Append(d...)
+		state.Probes = probes
+	}
 
 	setTagsOut(ctx, output.Tags)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
